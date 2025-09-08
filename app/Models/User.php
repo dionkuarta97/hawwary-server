@@ -19,8 +19,11 @@ class User extends Authenticatable
      */
     protected $fillable = [
         'name',
-        'email',
+        'username',
+        'role',
         'password',
+        'password_changed_at',
+
     ];
 
     /**
@@ -39,7 +42,67 @@ class User extends Authenticatable
      * @var array<string, string>
      */
     protected $casts = [
-        'email_verified_at' => 'datetime',
         'password' => 'hashed',
+        'password_changed_at' => 'datetime',
     ];
+
+    /**
+     * Check if user is owner
+     */
+    public function isOwner(): bool
+    {
+        return $this->role === 'owner';
+    }
+
+    /**
+     * Check if user is staff
+     */
+    public function isStaff(): bool
+    {
+        return $this->role === 'staff';
+    }
+
+    /**
+     * Check if user has specific role
+     */
+    public function hasRole(string $role): bool
+    {
+        return $this->role === $role;
+    }
+
+    /**
+     * Check if user has any of the given roles
+     */
+    public function hasAnyRole(array $roles): bool
+    {
+        return in_array($this->role, $roles);
+    }
+
+    /**
+     * Check if password has been changed
+     */
+    public function hasPasswordChanged(): bool
+    {
+        return !is_null($this->password_changed_at);
+    }
+
+    /**
+     * Check if password is still default (not changed)
+     */
+    public function isPasswordDefault(): bool
+    {
+        return is_null($this->password_changed_at);
+    }
+
+    /**
+     * Get days since password was last changed
+     */
+    public function getDaysSincePasswordChange(): int
+    {
+        if (!$this->hasPasswordChanged()) {
+            return 0;
+        }
+
+        return $this->password_changed_at->diffInDays(now());
+    }
 }

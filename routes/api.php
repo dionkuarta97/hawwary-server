@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\UserController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 
@@ -14,6 +15,14 @@ use Illuminate\Support\Facades\Route;
 |
 */
 
-Route::middleware('auth:sanctum')->get('/user', function (Request $request) {
-    return $request->user();
+// Public routes
+Route::post('login', [UserController::class, 'login']);
+
+// Protected routes (perlu token)
+Route::middleware(['auth:sanctum'])->group(function () {
+    Route::delete('logout', [UserController::class, 'logout']);
 });
+
+// Include owner and staff routes
+Route::prefix('owner')->group(base_path('routes/owner.php'));
+Route::prefix('staff')->group(base_path('routes/staff.php'));
