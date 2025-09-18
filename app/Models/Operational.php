@@ -6,22 +6,22 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use App\Models\Tranksaksi;
 
-class Pasien extends Model
+class Operational extends Model
 {
     use HasFactory;
+
+    protected $table = 'operationals';
+
     protected $fillable = [
-        'no_rm',
-        'nama',
-        'domisili',
-        'tanggal_lahir',
-        'no_hp',
-        'jenis_kelamin',
-        'nik',
-        'deleted_at',
+        'transaksi_id',
+        'name',
+        'amount',
+        'description',
+        'status',
     ];
 
     public function transaksi()
     {
-        return $this->hasMany(Tranksaksi::class);
+        return $this->belongsTo(Tranksaksi::class, 'transaksi_id');
     }
 }

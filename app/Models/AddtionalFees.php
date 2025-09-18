@@ -10,6 +10,7 @@ class AddtionalFees extends Model
     use HasFactory;
     protected $fillable = [
         'name',
+        'type',
         'percentage',
         'deleted_at',
     ];
