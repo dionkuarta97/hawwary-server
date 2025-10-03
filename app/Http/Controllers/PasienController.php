@@ -16,17 +16,17 @@ class PasienController extends Controller
             'nama' => 'required',
             'domisili' => 'required',
             'tanggal_lahir' => 'nullable|date',
+            'jenis_kelamin' => 'nullable|string',
         ]);
 
-        // Generate no_rm otomatis berdasarkan ID terakhir + 1
-        $lastPasien = Pasien::orderBy('id', 'desc')->first();
-        $nextNoRm = $lastPasien ? $lastPasien->id + 1 : 1;
+
 
         $pasien = Pasien::create([
-            'no_rm' => $nextNoRm,
+            'no_rm' => $request->no_rm,
             'nama' => $request->nama,
             'domisili' => $request->domisili,
             'tanggal_lahir' => $request->tanggal_lahir,
+            'jenis_kelamin' => $request->jenis_kelamin,
             'no_hp' => $request->no_hp,
             'nik' => $request->nik,
         ]);
@@ -71,6 +71,9 @@ class PasienController extends Controller
         if ($request->has('tanggal_lahir')) {
             $pasien->tanggal_lahir = $request->tanggal_lahir;
         }
+        if ($request->has('jenis_kelamin')) {
+            $pasien->jenis_kelamin = $request->jenis_kelamin;
+        }
         if ($request->has('no_hp')) {
             $pasien->no_hp = $request->no_hp;
         }
@@ -80,5 +83,55 @@ class PasienController extends Controller
         $pasien->updated_at = now();
         $pasien->save();
         return $this->successResponse($pasien, 'Pasien berhasil diubah', 200);
+    }
+
+    public function getPasienById(Request $request, $id)
+    {
+        $pasien = Pasien::find($id);
+        if (!$pasien) {
+            return $this->errorResponse('Pasien tidak ditemukan', 404);
+        }
+        return $this->successResponse($pasien, 'Pasien berhasil diambil', 200);
+    }
+
+    public function getNoRm(Request $request)
+    {
+        // Ambil nomor RM terakhir dari database
+        $lastNoRm = Pasien::whereNull('deleted_at')
+            ->orderBy('no_rm', 'desc')
+            ->value('no_rm');
+
+        // Jika belum ada data, mulai dari 1
+        // Jika ada data, tambahkan 1
+        $newNoRm = $lastNoRm ? $lastNoRm + 1 : 1;
+
+        // Pastikan nomor RM tidak duplicate
+        $maxAttempts = 10; // Maksimal 10 percobaan untuk mencegah infinite loop
+        $attempts = 0;
+
+        while ($attempts < $maxAttempts) {
+            // Cek apakah nomor RM sudah ada
+            $exists = Pasien::where('no_rm', $newNoRm)
+                ->whereNull('deleted_at')
+                ->exists();
+
+            if (!$exists) {
+                // Nomor RM belum ada, aman untuk digunakan
+                break;
+            }
+
+            // Nomor RM sudah ada, coba nomor berikutnya
+            $newNoRm++;
+            $attempts++;
+        }
+
+        // Jika masih duplicate setelah max attempts, return error
+        if ($attempts >= $maxAttempts) {
+            return $this->errorResponse('Gagal menghasilkan nomor RM unik', 500);
+        }
+
+        return $this->successResponse([
+            'no_rm' => $newNoRm
+        ], 'Nomor RM berhasil diambil', 200);
     }
 }

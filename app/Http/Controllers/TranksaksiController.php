@@ -137,6 +137,63 @@ class TranksaksiController extends Controller
 
     public function getTransaksi(Request $request)
     {
+        // Buat query dengan filter
+        $query = $this->buildTransaksiQuery($request);
+
+        // Order berdasarkan created_at (default desc)
+        $order = $request->order ?? 'desc';
+        $query->orderBy('created_at', $order);
+
+        // Pagination
+        $limit = $request->limit ?? 10;
+        $transaksis = $query->with([
+            'pasien:id,nama,no_rm,domisili,no_hp,nik,tanggal_lahir,jenis_kelamin',
+            'docter:id,name',
+            'dantel:id,name',
+            'operational'
+        ])->paginate($limit);
+
+        // Hitung total amount dari semua transaksi yang difilter
+        $totalAmountQuery = $this->buildTransaksiQuery($request);
+        $totalAmount = $totalAmountQuery->sum('total_amount');
+        // Hitung per status
+        $totalPendingAmount = $this->buildTransaksiQuery($request)->where('status', 'pending')->sum('total_amount');
+        $totalSuccessAmount = $this->buildTransaksiQuery($request)->where('status', 'sukses')->sum('total_amount');
+        $totalFailedAmount = $this->buildTransaksiQuery($request)->where('status', 'gagal')->sum('total_amount');
+
+        // hitung total modal dari transaksi sukses
+        $totalModalAmount = $this->buildTransaksiQuery($request)
+            ->where('status', 'sukses')
+            ->whereHas('operational', function ($q) {
+                $q->where('status', 'success');
+            })
+            ->with('operational')
+            ->get()
+            ->sum(function ($transaksi) {
+                return $transaksi->operational ? $transaksi->operational->amount : 0;
+            });
+
+
+        return $this->successResponseWithPagination([
+            'data' => $transaksis->items(),
+            'current_page' => $transaksis->currentPage(),
+            'per_page' => $transaksis->perPage(),
+            'total' => $transaksis->total(),
+            'last_page' => $transaksis->lastPage(),
+            'from' => $transaksis->firstItem(),
+            'to' => $transaksis->lastItem(),
+            'statistics' => [
+                'total' => $totalAmount,
+                'pending' => $totalPendingAmount,
+                'success' => $totalSuccessAmount,
+                'failed' => $totalFailedAmount,
+                'total_modal' => $totalModalAmount
+            ]
+        ], 'Data transaksi berhasil diambil', 200);
+    }
+
+    private function buildTransaksiQuery(Request $request)
+    {
         $query = Tranksaksi::query();
 
         // Filter berdasarkan rentang tanggal
@@ -181,21 +238,10 @@ class TranksaksiController extends Controller
             $query->where('status', $request->status);
         }
 
-        // Order berdasarkan created_at (default desc)
-        $order = $request->order ?? 'desc';
-        $query->orderBy('created_at', $order);
+        // Filter soft deleted records
+        $query->whereNull('deleted_at');
 
-        // Pagination
-        $limit = $request->limit ?? 10;
-        $transaksis = $query->with([
-            'pasien:id,nama,no_rm,domisili,no_hp,nik,tanggal_lahir,jenis_kelamin',
-            'docter:id,name',
-            'dantel:id,name',
-            'operational'
-        ])->whereNull('deleted_at')->paginate($limit);
-
-
-        return $this->successResponseWithPagination($transaksis, 'Data transaksi berhasil diambil', 200);
+        return $query;
     }
 
     public function updateStatusTransaksi(Request $request, $id)
@@ -213,7 +259,7 @@ class TranksaksiController extends Controller
             $transaksi->save();
             if ($request->status == 'gagal') {
                 // Update status operational menjadi cancelled
-                $transaksi->operational()->update(['status' => 'cancelled']);
+                $transaksi->operational()->update(['status' => 'failed']);
             }
             if ($request->status == 'sukses') {
                 // Update status operational menjadi success
@@ -252,6 +298,26 @@ class TranksaksiController extends Controller
             return $this->errorResponse($e->getMessage(), 400);
         }
         return $this->successResponse(['transaksi' => $transaksi, 'feeDistributions' => $feeDistributions ?? []], 'Status transaksi berhasil diubah', 200);
+    }
+
+    public function getTransaksiById($id)
+    {
+        $transaksi = Tranksaksi::with([
+            'pasien:id,nama,no_rm,domisili,no_hp,nik,tanggal_lahir,jenis_kelamin',
+            'docter:id,name',
+            'dantel:id,name',
+            'operational'
+        ])->find($id);
+        if (!$transaksi) {
+            return $this->errorResponse('Transaksi tidak ditemukan', 404);
+        }
+        $transaksi->load([
+            'pasien:id,nama,no_rm,domisili,no_hp,nik,tanggal_lahir,jenis_kelamin',
+            'docter:id,name',
+            'dantel:id,name',
+            'operational'
+        ]);
+        return $this->successResponse($transaksi, 'Transaksi berhasil diambil', 200);
     }
 
 

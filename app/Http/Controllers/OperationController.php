@@ -13,6 +13,45 @@ class OperationController extends Controller
 
     public function getOperation(Request $request)
     {
+        // Buat query dengan filter
+        $query = $this->buildOperationQuery($request);
+
+        // Order berdasarkan created_at (default desc)
+        $order = $request->order ?? 'desc';
+        $query->orderBy('created_at', $order);
+
+        // Pagination
+        $limit = $request->limit ?? 10;
+        $operations = $query->paginate($limit);
+
+        // Hitung total amount dari semua operational yang difilter
+        $totalAmountQuery = $this->buildOperationQuery($request);
+        $totalAmount = $totalAmountQuery->sum('amount');
+
+        // Hitung per status
+        $totalPendingAmount = $this->buildOperationQuery($request)->where('status', 'pending')->sum('amount');
+        $totalSuccessAmount = $this->buildOperationQuery($request)->where('status', 'success')->sum('amount');
+        $totalFailedAmount = $this->buildOperationQuery($request)->where('status', 'failed')->sum('amount');
+
+        return $this->successResponseWithPagination([
+            'data' => $operations->items(),
+            'current_page' => $operations->currentPage(),
+            'per_page' => $operations->perPage(),
+            'total' => $operations->total(),
+            'last_page' => $operations->lastPage(),
+            'from' => $operations->firstItem(),
+            'to' => $operations->lastItem(),
+            'statistics' => [
+                'total' => $totalAmount,
+                'pending' => $totalPendingAmount,
+                'success' => $totalSuccessAmount,
+                'failed' => $totalFailedAmount
+            ]
+        ], 'Data operation berhasil diambil', 200);
+    }
+
+    private function buildOperationQuery(Request $request)
+    {
         $query = Operational::query();
 
         // Filter berdasarkan rentang tanggal
@@ -28,14 +67,16 @@ class OperationController extends Controller
             $query->where('created_at', '<=', $endDate);
         }
 
-        // Filter berdasarkan search (nama dokter, dantel, pasien, atau description)
+        // Filter berdasarkan search (nama atau description)
         if ($request->has('search') && !empty($request->search)) {
             $searchTerm = $request->search;
-            $query->where('name', 'like', '%' . $searchTerm . '%');
-            $query->orWhere('description', 'like', '%' . $searchTerm . '%');
+            $query->where(function ($q) use ($searchTerm) {
+                $q->where('name', 'like', '%' . $searchTerm . '%')
+                    ->orWhere('description', 'like', '%' . $searchTerm . '%');
+            });
         }
 
-        // Filter berdasarkan nomor RM pasien
+        // Filter berdasarkan type
         if ($request->has('type')) {
             if ($request->type == 'modal') {
                 $query->whereNotNull('transaksi_id');
@@ -49,15 +90,15 @@ class OperationController extends Controller
             $query->where('status', $request->status);
         }
 
-        // Order berdasarkan created_at (default desc)
-        $order = $request->order ?? 'desc';
-        $query->orderBy('created_at', $order);
+        // Filter no modal
+        if ($request->has('no_modal')) {
+            $query->whereNull('transaksi_id');
+        }
 
-        // Pagination
-        $limit = $request->limit ?? 10;
-        $operation = $query->paginate($limit);
+        // Filter soft deleted records
+        $query->whereNull('deleted_at');
 
-        return $this->successResponseWithPagination($operation, 'Data operation berhasil diambil', 200);
+        return $query;
     }
 
     public function createOperation(Request $request)
@@ -103,6 +144,18 @@ class OperationController extends Controller
         return $this->successResponse($operation, 'Data operation berhasil diubah', 200);
     }
 
+
+    public function getOperationById(Request $request, $id)
+    {
+        $operation = Operational::find($id);
+        if (!$operation) {
+            return $this->errorResponse('Data operation tidak ditemukan', 404);
+        }
+        if ($operation->deleted_at) {
+            return $this->errorResponse('Data operation tidak aktif', 401);
+        }
+        return $this->successResponse($operation, 'Data operation berhasil diambil', 200);
+    }
 
 
     private function parseDate($dateString)
