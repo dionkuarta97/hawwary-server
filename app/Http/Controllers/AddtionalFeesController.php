@@ -13,8 +13,17 @@ class AddtionalFeesController extends Controller
     {
         $request->validate([
             'name' => 'required',
-            'percentage' => 'required',
+            'percentage' => 'required|numeric|min:0|max:100',
         ]);
+
+        // Hitung total persentase yang sudah ada (tidak termasuk yang dihapus)
+        $totalPercentage = AddtionalFees::whereNull('deleted_at')->sum('percentage');
+
+        // Cek apakah total persentase akan melebihi 100%
+        if (($totalPercentage + $request->percentage) > 100) {
+            return $this->errorResponse('Total persentase tidak boleh melebihi 100%. Persentase saat ini: ' . $totalPercentage . '%', 400);
+        }
+
         $addtionalFees = AddtionalFees::create([
             'name' => $request->name,
             'percentage' => $request->percentage,
@@ -26,7 +35,19 @@ class AddtionalFeesController extends Controller
         $search = $request->search ?? '';
         $limit = $request->limit ?? 10;
         $addtionalFees = AddtionalFees::where('name', 'like', '%' . $search . '%')->whereNull('deleted_at')->paginate($limit);
-        return $this->successResponseWithPagination($addtionalFees, 'Addtional Fees berhasil diambil', 200);
+        $percentage = AddtionalFees::whereNull('deleted_at')->sum('percentage');
+        return $this->successResponseWithPagination([
+            'data' => $addtionalFees->items(),
+            'current_page' => $addtionalFees->currentPage(),
+            'per_page' => $addtionalFees->perPage(),
+            'total' => $addtionalFees->total(),
+            'last_page' => $addtionalFees->lastPage(),
+            'from' => $addtionalFees->firstItem(),
+            'to' => $addtionalFees->lastItem(),
+            'statistics' => [
+                'total_percentage' => $percentage,
+            ]
+        ], 'Addtional Fees berhasil diambil', 200);
     }
     public function updateAddtionalFees(Request $request, $id)
     {
@@ -37,6 +58,24 @@ class AddtionalFeesController extends Controller
         if ($addtionalFees->deleted_at) {
             return $this->errorResponse('Addtional Fees tidak aktif', 401);
         }
+
+        // Validasi persentase jika ada
+        if ($request->has('percentage')) {
+            $request->validate([
+                'percentage' => 'numeric|min:0|max:100',
+            ]);
+
+            // Hitung total persentase yang sudah ada (tidak termasuk yang dihapus dan record yang sedang diupdate)
+            $totalPercentage = AddtionalFees::whereNull('deleted_at')
+                ->where('id', '!=', $id)
+                ->sum('percentage');
+
+            // Cek apakah total persentase akan melebihi 100%
+            if (($totalPercentage + $request->percentage) > 100) {
+                return $this->errorResponse('Total persentase tidak boleh melebihi 100%. Persentase saat ini: ' . $totalPercentage . '%', 400);
+            }
+        }
+
         if ($request->has('name')) {
             $addtionalFees->name = $request->name;
         }
