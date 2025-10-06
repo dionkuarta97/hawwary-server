@@ -17,6 +17,7 @@ use Illuminate\Support\Facades\Route;
 
 // Public routes
 Route::post('login', [UserController::class, 'login']);
+Route::post('login-owner', [UserController::class, 'loginOwner']);
 
 // Protected routes (perlu token)
 Route::middleware(['auth:sanctum'])->group(function () {

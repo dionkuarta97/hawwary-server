@@ -40,6 +40,33 @@ class UserController extends Controller
         return $this->successResponse(['user' => $user, 'token' => $token]);
     }
 
+    public function loginOwner(Request $request)
+    {
+        $request->validate([
+            'username' => 'required',
+            'password' => 'required',
+        ]);
+
+        $user = User::where('username', $request->username)->first();
+        if (!$user) {
+            return $this->errorResponse('username atau password tidak cocok', 401);
+        }
+
+        if (!Hash::check($request->password, $user->password)) {
+            return $this->errorResponse('username atau password tidak cocok', 401);
+        }
+        if ($user->deleted_at) {
+            return $this->errorResponse('User tidak aktif', 401);
+        }
+        if ($user->role !== 'owner') {
+            return $this->errorResponse('User tidak memiliki role owner', 401);
+        }
+
+        $token = $user->createToken('auth_token')->plainTextToken;
+
+        return $this->successResponse(['user' => $user, 'token' => $token]);
+    }
+
     public function changePassword(Request $request, $id)
     {
         $request->validate([
