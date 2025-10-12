@@ -222,6 +222,9 @@ class TranksaksiController extends Controller
                     ->orWhereHas('pasien', function ($subQ) use ($searchTerm) {
                         $subQ->where('nama', 'like', '%' . $searchTerm . '%');
                     })
+                    ->orWhereHas('pasien', function ($subQ) use ($searchTerm) {
+                        $subQ->where('no_rm', $searchTerm);
+                    })
                     ->orWhere('description', 'like', '%' . $searchTerm . '%');
             });
         }
@@ -240,6 +243,16 @@ class TranksaksiController extends Controller
 
         // Filter soft deleted records
         $query->whereNull('deleted_at');
+
+        // Filter berdasarkan docter_id
+        if ($request->has('docter_id')) {
+            $query->where('docter_id', $request->docter_id);
+        }
+
+        // Filter berdasarkan dantel_id
+        if ($request->has('dantel_id')) {
+            $query->where('dantel_id', $request->dantel_id);
+        }
 
         return $query;
     }
@@ -274,9 +287,11 @@ class TranksaksiController extends Controller
 
                     // Tentukan recipient_id berdasarkan type dari additional_fee
                     $recipientId = null;
-                    if ($additionalFee->name === 'docter' || $additionalFee->name === 'dokter') {
+                    $feeName = strtolower($additionalFee->name); // Normalisasi ke lowercase untuk perbandingan
+
+                    if ($feeName === 'docter' || $feeName === 'dokter') {
                         $recipientId = $transaksi->docter_id;
-                    } elseif ($additionalFee->name === 'dantel') {
+                    } elseif ($feeName === 'dental') {
                         $recipientId = $transaksi->dantel_id;
                     }
 
@@ -321,6 +336,106 @@ class TranksaksiController extends Controller
     }
 
 
+    public function updateTransaksiStatusForOwner(Request $request, $id)
+    {
+        $transaksi = Tranksaksi::find($id);
+        if (!$transaksi) {
+            return $this->errorResponse('Transaksi tidak ditemukan', 404);
+        }
+        DB::beginTransaction();
+        try {
+            $transaksi->status = $request->status;
+            $transaksi->save();
+            if ($request->status == 'gagal') {
+                // Update status operational menjadi cancelled
+                $transaksi->operational()->update(['status' => 'failed']);
+                $feeDistribution = FeeDistribution::where('transaksi_id', $transaksi->id)->get();
+                if ($feeDistribution) {
+                    foreach ($feeDistribution as $fee) {
+                        $fee->delete();
+                    }
+                }
+            }
+            if ($request->status == 'pending') {
+                $transaksi->operational()->update(['status' => 'pending']);
+                $feeDistribution = FeeDistribution::where('transaksi_id', $transaksi->id)->get();
+                if ($feeDistribution) {
+                    foreach ($feeDistribution as $fee) {
+                        $fee->delete();
+                    }
+                }
+            }
+            if ($request->status == 'sukses') {
+                // Update status operational menjadi success
+                $transaksi->operational()->update(['status' => 'success']);
+                $additionalFees = AddtionalFees::whereNull('deleted_at')->get();
+                $feeDistributions = [];
+
+                foreach ($additionalFees as $additionalFee) {
+                    $calculatedAmount = ($transaksi->net_amount * $additionalFee->percentage) / 100;
+
+                    $recipientType = strtolower(str_replace([' ', ',', '.'], ['-', '', ''], $additionalFee->name));
+
+                    // Tentukan recipient_id berdasarkan type dari additional_fee
+                    $recipientId = null;
+                    $feeName = strtolower($additionalFee->name); // Normalisasi ke lowercase untuk perbandingan
+
+                    if ($feeName === 'docter' || $feeName === 'dokter') {
+                        $recipientId = $transaksi->docter_id;
+                    } elseif ($feeName === 'dental') {
+                        $recipientId = $transaksi->dantel_id;
+                    }
+
+                    $feeDistribution = FeeDistribution::create([
+                        'transaksi_id' => $transaksi->id,
+                        'additional_fee_id' => $additionalFee->id,
+                        'recipient_type' => $recipientType,
+                        'recipient_id' => $recipientId,
+                        'percentage' => $additionalFee->percentage,
+                        'amount' => $calculatedAmount,
+                    ]);
+
+                    $feeDistributions[] = $feeDistribution;
+                }
+            }
+            DB::commit();
+        } catch (\Exception $e) {
+            DB::rollBack();
+            return $this->errorResponse($e->getMessage(), 400);
+        }
+        return $this->successResponse(['transaksi' => $transaksi, 'feeDistributions' => $feeDistributions ?? []], 'Status transaksi berhasil diubah', 200);
+    }
+
+    public function deleteTransaksiForOwner($id)
+    {
+        $transaksi = Tranksaksi::find($id);
+        if (!$transaksi) {
+            return $this->errorResponse('Transaksi tidak ditemukan', 404);
+        }
+        DB::beginTransaction();
+        try {
+            $transaksi->deleted_at = now();
+            $transaksi->save();
+            $feeDistribution = FeeDistribution::where('transaksi_id', $transaksi->id)->get();
+            if ($feeDistribution) {
+                foreach ($feeDistribution as $fee) {
+                    $fee->delete();
+                }
+            }
+            $operational = Operational::where('transaksi_id', $transaksi->id)->get();
+            if ($operational) {
+                foreach ($operational as $oper) {
+                    $oper->deleted_at = now();
+                    $oper->save();
+                }
+            }
+            DB::commit();
+        } catch (\Exception $e) {
+            DB::rollBack();
+            return $this->errorResponse($e->getMessage(), 400);
+        }
+        return $this->successResponse(['transaksi' => $transaksi], 'Transaksi berhasil dihapus', 200);
+    }
     private function parseDate($dateString)
     {
         // Coba berbagai format tanggal
@@ -347,5 +462,30 @@ class TranksaksiController extends Controller
         } catch (\Exception $e) {
             throw new \InvalidArgumentException("Tidak bisa memparse tanggal: {$dateString}");
         }
+    }
+
+    public function printStruk($id)
+    {
+        $transaksi = Tranksaksi::with([
+            'pasien',
+            'docter',
+            'dantel',
+            'operational',
+        ])->find($id);
+
+        if (!$transaksi) {
+            return $this->errorResponse('Transaksi tidak ditemukan', 404);
+        }
+
+        if ($transaksi->deleted_at) {
+            return $this->errorResponse('Transaksi sudah dihapus', 400);
+        }
+
+        // Get fee distributions untuk transaksi ini
+        $feeDistributions = FeeDistribution::where('transaksi_id', $id)
+            ->with(['additionalFee'])
+            ->get();
+
+        return view('struk.thermal-simple', compact('transaksi', 'feeDistributions'));
     }
 }

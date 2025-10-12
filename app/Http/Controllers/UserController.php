@@ -70,7 +70,6 @@ class UserController extends Controller
     public function changePassword(Request $request, $id)
     {
         $request->validate([
-
             'new_password' => 'required|min:6|confirmed',
         ]);
 
@@ -107,7 +106,7 @@ class UserController extends Controller
         $request->validate([
             'name' => 'required',
             'username' => 'required',
-            'password' => 'required',
+            'password' => 'required|min:6',
         ]);
         $user = User::create([
             'name' => $request->name,

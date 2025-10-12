@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\TranksaksiController;
 use App\Http\Controllers\UserController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
@@ -18,6 +19,7 @@ use Illuminate\Support\Facades\Route;
 // Public routes
 Route::post('login', [UserController::class, 'login']);
 Route::post('login-owner', [UserController::class, 'loginOwner']);
+Route::get('struk/{id}', [TranksaksiController::class, 'printStruk']);
 
 // Protected routes (perlu token)
 Route::middleware(['auth:sanctum'])->group(function () {

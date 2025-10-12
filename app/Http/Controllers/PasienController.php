@@ -134,4 +134,101 @@ class PasienController extends Controller
             'no_rm' => $newNoRm
         ], 'Nomor RM berhasil diambil', 200);
     }
+
+    public function getPasienForOwner(Request $request)
+    {
+        // Buat query dengan filter
+        $query = $this->buildPasienQuery($request);
+
+        // Tambahkan withCount untuk transaksi
+        $query->withCount([
+            'transaksi' => function ($q) {
+                $q->whereNull('deleted_at');
+            }
+        ]);
+
+        // Order berdasarkan created_at (default desc)
+        $order = $request->order ?? 'desc';
+        $orderby = $request->orderby ?? 'created_at';
+
+        // Jika order by total_transaksi, gunakan transaksi_count
+        if ($orderby === 'total_transaksi') {
+            $query->orderBy('transaksi_count', $order);
+        } else {
+            $query->orderBy($orderby, $order);
+        }
+
+        // Pagination
+        $limit = $request->limit ?? 10;
+        $pasiens = $query->paginate($limit);
+
+        // Transform data untuk menambahkan total_transaksi
+        $items = collect($pasiens->items())->map(function ($pasien) {
+            $pasien->total_transaksi = $pasien->transaksi_count;
+            unset($pasien->transaksi_count);
+            return $pasien;
+        });
+
+        // Statistik pasien yang order lebih dari 1x
+        $pasienLoyalQuery = $this->buildPasienQuery($request);
+        $pasienLoyal = $pasienLoyalQuery->has('transaksi', '>', 1)->count();
+
+        // Statistik pasien baru bulan ini
+        $startOfMonth = now()->startOfMonth();
+        $endOfMonth = now()->endOfMonth();
+        $pasienBaruQuery = $this->buildPasienQuery($request);
+        $pasienBaru = $pasienBaruQuery->whereBetween('created_at', [$startOfMonth, $endOfMonth])->count();
+
+        // Total semua pasien
+        $totalPasienQuery = $this->buildPasienQuery($request);
+        $totalPasien = $totalPasienQuery->count();
+
+        return $this->successResponseWithPagination([
+            'data' => $items,
+            'current_page' => $pasiens->currentPage(),
+            'per_page' => $pasiens->perPage(),
+            'total' => $pasiens->total(),
+            'last_page' => $pasiens->lastPage(),
+            'from' => $pasiens->firstItem(),
+            'to' => $pasiens->lastItem(),
+            'statistics' => [
+                'total' => $totalPasien,
+                'pasien_loyal' => $pasienLoyal,
+                'pasien_baru_bulan_ini' => $pasienBaru,
+            ]
+        ], 'Data pasien berhasil diambil', 200);
+    }
+
+    private function buildPasienQuery(Request $request)
+    {
+        $query = Pasien::query();
+
+
+        // Filter berdasarkan search (nama, no_rm, domisili, nik, no_hp)
+        if ($request->has('search') && !empty($request->search)) {
+            $searchTerm = $request->search;
+            $query->where(function ($q) use ($searchTerm) {
+                $q->where('nama', 'like', '%' . $searchTerm . '%')
+                    ->orWhere('no_rm', 'like', '%' . $searchTerm . '%')
+                    ->orWhere('domisili', 'like', '%' . $searchTerm . '%')
+                    ->orWhere('nik', 'like', '%' . $searchTerm . '%')
+                    ->orWhere('no_hp', 'like', '%' . $searchTerm . '%');
+            });
+        }
+
+        // Filter berdasarkan nomor RM
+        if ($request->has('no_rm')) {
+            $query->where('no_rm', $request->no_rm);
+        }
+
+        // Filter berdasarkan jenis kelamin
+        if ($request->has('jenis_kelamin')) {
+            $query->where('jenis_kelamin', $request->jenis_kelamin);
+        }
+
+        // Filter soft deleted records
+        $query->whereNull('deleted_at');
+
+        return $query;
+    }
 }

@@ -27,6 +27,7 @@ Route::middleware(['auth:sanctum', 'role:staff'])->group(function () {
     Route::post('/transaksi', [TranksaksiController::class, 'createTranksaksi']);
     Route::get('/transaksi', [TranksaksiController::class, 'getTransaksi']);
     Route::get('/transaksi/{id}', [TranksaksiController::class, 'getTransaksiById']);
+    Route::get('/transaksi/{id}/struk', [TranksaksiController::class, 'printStruk']);
     Route::patch('/transaksi/{id}/status', [TranksaksiController::class, 'updateStatusTransaksi']);
     Route::put('/transaksi/{id}', [TranksaksiController::class, 'updateTranksaksi']);
     Route::get('/operational', [OperationController::class, 'getOperation']);
