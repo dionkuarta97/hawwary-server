@@ -61,7 +61,7 @@ class FeeDistribution extends Model
         // Map recipient_type ke relasi yang sesuai
         if (in_array($type, ['docter', 'dokter'])) {
             return $this->docter;
-        } elseif ($type === 'dantel') {
+        } elseif ($type === 'dental') {
             return $this->dantel;
         }
 
