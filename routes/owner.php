@@ -72,5 +72,6 @@ Route::middleware(['auth:sanctum', 'role:owner'])->group(function () {
     });
     route::prefix('statistic')->group(function () {
         Route::get('dashboard', [StatisticController::class, 'getStatistic']);
+        Route::get('trend', [StatisticController::class, 'getTrend']);
     });
 });

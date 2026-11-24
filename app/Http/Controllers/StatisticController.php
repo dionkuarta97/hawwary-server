@@ -57,6 +57,251 @@ class StatisticController extends Controller
         ], 'Data statistik berhasil diambil', 200);
     }
 
+    public function getTrend(Request $request)
+    {
+        $request->validate([
+            'type' => 'required|in:today,month,year'
+        ]);
+
+        $type = $request->type;
+        $periods = $this->getPeriods($type);
+        $granularity = $this->getTrendGranularity($type);
+
+        $currentSeries = $this->buildTrendSeries(
+            $periods['current_start'],
+            $periods['current_end'],
+            $granularity
+        );
+        $previousSeries = $this->buildTrendSeries(
+            $periods['previous_start'],
+            $periods['previous_end'],
+            $granularity
+        );
+
+        return $this->successResponse([
+            'type' => $type,
+            'granularity' => $granularity,
+            'current' => [
+                'period' => [
+                    'start' => $periods['current_start']->format('Y-m-d H:i:s'),
+                    'end' => $periods['current_end']->format('Y-m-d H:i:s'),
+                ],
+                'series' => $currentSeries,
+            ],
+            'previous' => [
+                'period' => [
+                    'start' => $periods['previous_start']->format('Y-m-d H:i:s'),
+                    'end' => $periods['previous_end']->format('Y-m-d H:i:s'),
+                ],
+                'series' => $previousSeries,
+            ],
+            'comparison' => $this->mergeTrendComparison($currentSeries, $previousSeries, $granularity),
+        ], 'Data tren statistik berhasil diambil', 200);
+    }
+
+    private function getTrendGranularity($type)
+    {
+        switch ($type) {
+            case 'today':
+                return 'hour';
+            case 'month':
+                return 'day';
+            case 'year':
+                return 'month';
+            default:
+                return 'day';
+        }
+    }
+
+    private function buildTrendSeries($startDate, $endDate, $granularity)
+    {
+        $buckets = $this->generateTrendBuckets($startDate, $endDate, $granularity);
+        $pendapatanMap = $this->aggregateTransaksiByBucket($startDate, $endDate, $granularity);
+        $operationalMap = $this->aggregateOperationalByBucket($startDate, $endDate, $granularity);
+        $pasienMap = $this->aggregatePasienByBucket($startDate, $endDate, $granularity);
+
+        $series = [];
+        foreach ($buckets as $bucket) {
+            $key = $bucket['key'];
+            $pendapatan = (float) ($pendapatanMap[$key]['pendapatan'] ?? 0);
+            $transaksiCount = (int) ($pendapatanMap[$key]['count'] ?? 0);
+            $operational = (float) ($operationalMap[$key] ?? 0);
+            $pasienCount = (int) ($pasienMap[$key] ?? 0);
+
+            $series[] = [
+                'key' => $key,
+                'label' => $bucket['label'],
+                'pendapatan' => $pendapatan,
+                'operational' => $operational,
+                'pendapatan_bersih' => $pendapatan - $operational,
+                'transaksi_count' => $transaksiCount,
+                'pasien_count' => $pasienCount,
+            ];
+        }
+
+        return $series;
+    }
+
+    private function generateTrendBuckets($startDate, $endDate, $granularity)
+    {
+        $buckets = [];
+        $cursor = $startDate->copy();
+
+        if ($granularity === 'hour') {
+            while ($cursor->lte($endDate)) {
+                $buckets[] = [
+                    'key' => $cursor->format('Y-m-d H'),
+                    'label' => $cursor->format('H:00'),
+                ];
+                $cursor->addHour();
+            }
+            return $buckets;
+        }
+
+        if ($granularity === 'month') {
+            while ($cursor->lte($endDate)) {
+                $buckets[] = [
+                    'key' => $cursor->format('Y-m'),
+                    'label' => $cursor->translatedFormat('M'),
+                ];
+                $cursor->addMonth();
+            }
+            return $buckets;
+        }
+
+        while ($cursor->lte($endDate)) {
+            $buckets[] = [
+                'key' => $cursor->format('Y-m-d'),
+                'label' => $cursor->format('d'),
+            ];
+            $cursor->addDay();
+        }
+
+        return $buckets;
+    }
+
+    private function getBucketKeyExpression($granularity, $column = 'created_at')
+    {
+        switch ($granularity) {
+            case 'hour':
+                return "DATE_FORMAT({$column}, '%Y-%m-%d %H')";
+            case 'month':
+                return "DATE_FORMAT({$column}, '%Y-%m')";
+            default:
+                return "DATE_FORMAT({$column}, '%Y-%m-%d')";
+        }
+    }
+
+    private function aggregateTransaksiByBucket($startDate, $endDate, $granularity)
+    {
+        $bucketExpr = $this->getBucketKeyExpression($granularity, 'created_at');
+
+        $rows = Tranksaksi::whereBetween('created_at', [$startDate, $endDate])
+            ->whereNull('deleted_at')
+            ->where('status', 'sukses')
+            ->selectRaw("{$bucketExpr} as bucket_key, SUM(total_amount) as pendapatan, COUNT(*) as total_count")
+            ->groupByRaw($bucketExpr)
+            ->get();
+
+        $map = [];
+        foreach ($rows as $row) {
+            $map[$row->bucket_key] = [
+                'pendapatan' => (float) $row->pendapatan,
+                'count' => (int) $row->total_count,
+            ];
+        }
+
+        return $map;
+    }
+
+    private function aggregateOperationalByBucket($startDate, $endDate, $granularity)
+    {
+        $map = [];
+
+        // Non-modal: bucket by operational.created_at
+        $nonModalExpr = $this->getBucketKeyExpression($granularity, 'created_at');
+        $nonModalRows = \App\Models\Operational::whereNull('transaksi_id')
+            ->whereNull('deleted_at')
+            ->where('status', 'success')
+            ->whereBetween('created_at', [$startDate, $endDate])
+            ->selectRaw("{$nonModalExpr} as bucket_key, SUM(amount) as total_amount")
+            ->groupByRaw($nonModalExpr)
+            ->get();
+
+        foreach ($nonModalRows as $row) {
+            $map[$row->bucket_key] = ($map[$row->bucket_key] ?? 0) + (float) $row->total_amount;
+        }
+
+        // Modal: bucket by transaksi.created_at so it aligns with pendapatan
+        $modalExpr = $this->getBucketKeyExpression($granularity, 'transaksis.created_at');
+        $modalRows = \App\Models\Operational::query()
+            ->join('transaksis', 'operationals.transaksi_id', '=', 'transaksis.id')
+            ->whereNotNull('operationals.transaksi_id')
+            ->whereNull('operationals.deleted_at')
+            ->where('operationals.status', 'success')
+            ->whereNull('transaksis.deleted_at')
+            ->whereBetween('transaksis.created_at', [$startDate, $endDate])
+            ->selectRaw("{$modalExpr} as bucket_key, SUM(operationals.amount) as total_amount")
+            ->groupByRaw($modalExpr)
+            ->get();
+
+        foreach ($modalRows as $row) {
+            $map[$row->bucket_key] = ($map[$row->bucket_key] ?? 0) + (float) $row->total_amount;
+        }
+
+        return $map;
+    }
+
+    private function aggregatePasienByBucket($startDate, $endDate, $granularity)
+    {
+        $bucketExpr = $this->getBucketKeyExpression($granularity, 'created_at');
+
+        $rows = Pasien::whereBetween('created_at', [$startDate, $endDate])
+            ->whereNull('deleted_at')
+            ->selectRaw("{$bucketExpr} as bucket_key, COUNT(*) as total_count")
+            ->groupByRaw($bucketExpr)
+            ->get();
+
+        $map = [];
+        foreach ($rows as $row) {
+            $map[$row->bucket_key] = (int) $row->total_count;
+        }
+
+        return $map;
+    }
+
+    private function mergeTrendComparison($currentSeries, $previousSeries, $granularity)
+    {
+        $maxLength = max(count($currentSeries), count($previousSeries));
+        $comparison = [];
+
+        for ($i = 0; $i < $maxLength; $i++) {
+            $current = $currentSeries[$i] ?? null;
+            $previous = $previousSeries[$i] ?? null;
+
+            $label = $current['label'] ?? $previous['label'] ?? (string) ($i + 1);
+            if ($granularity === 'hour') {
+                $label = $current['label'] ?? $previous['label'] ?? sprintf('%02d:00', $i);
+            }
+
+            $comparison[] = [
+                'label' => $label,
+                'current_pendapatan' => (float) ($current['pendapatan'] ?? 0),
+                'previous_pendapatan' => (float) ($previous['pendapatan'] ?? 0),
+                'current_pendapatan_bersih' => (float) ($current['pendapatan_bersih'] ?? 0),
+                'previous_pendapatan_bersih' => (float) ($previous['pendapatan_bersih'] ?? 0),
+                'current_operational' => (float) ($current['operational'] ?? 0),
+                'previous_operational' => (float) ($previous['operational'] ?? 0),
+                'current_transaksi_count' => (int) ($current['transaksi_count'] ?? 0),
+                'previous_transaksi_count' => (int) ($previous['transaksi_count'] ?? 0),
+                'current_pasien_count' => (int) ($current['pasien_count'] ?? 0),
+                'previous_pasien_count' => (int) ($previous['pasien_count'] ?? 0),
+            ];
+        }
+
+        return $comparison;
+    }
+
     private function getPeriods($type)
     {
         $now = Carbon::now();
